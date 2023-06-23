@@ -1,0 +1,141 @@
+import logging
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import Updater, CommandHandler, CallbackQueryHandler, ConversationHandler, MessageHandler, Filters
+
+# Установка уровня логирования
+logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+                     level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Состояния для разговора с пользователем
+CATEGORY, TITLE, DESCRIPTION, PHOTO = range(4)
+
+# Обратная связь для кнопок
+BACK, DONE = range(2)
+
+# Словарь для хранения объявлений
+advertisements = {}
+
+
+def start(update, context):
+    user = update.message.from_user
+    context.bot.send_message(chat_id=update.effective_chat.id,
+                             text=f"Привет, {user.first_name}! Я бот доски объявлений. "
+                                  f"Чтобы опубликовать объявление, используйте команду /post.")
+
+
+def post_advertisement(update, context):
+    reply_markup = InlineKeyboardMarkup([[InlineKeyboardButton("Отмена", callback_data=str(BACK))]])
+
+    context.bot.send_message(chat_id=update.effective_chat.id,
+                             text="Шаг 1 из 3: Выберите категорию объявления.",
+                             reply_markup=reply_markup)
+
+    return CATEGORY
+
+
+def select_category(update, context):
+    query = update.callback_query
+    query.answer()
+
+    category = query.data
+    context.user_data['category'] = category
+
+    query.edit_message_text(text=f"Шаг 2 из 3: Введите заголовок объявления.")
+
+    return TITLE
+
+
+def enter_title(update, context):
+    title = update.message.text
+    context.user_data['title'] = title
+
+    update.message.reply_text("Шаг 3 из 3: Введите описание объявления.")
+
+    return DESCRIPTION
+
+
+def enter_description(update, context):
+    description = update.message.text
+    context.user_data['description'] = description
+
+    update.message.reply_text("Отправьте фото (необязательно), или введите /done, чтобы опубликовать объявление.")
+
+    return PHOTO
+
+
+def receive_photo(update, context):
+    photo_file = update.message.photo[-1].get_file()
+    photo_file.download('photo.jpg')
+
+    context.user_data['photo'] = 'photo.jpg'
+
+    update.message.reply_text("Фото получено. Введите /done, чтобы опубликовать объявление.")
+
+    return PHOTO
+
+
+def done(update, context):
+    user_data = context.user_data
+
+    category = user_data['category']
+    title = user_data['title']
+    description = user_data['description']
+    photo = user_data.get('photo')
+
+    advertisement = f"Категория: {category}\n" \
+                    f"Заголовок: {title}\n" \
+                    f"Описание: {description}\n" \
+                    f"Фото: {photo if photo else 'Нет фото'}"
+
+    advertisements[user_data['title']] = advertisement
+
+    update.message.reply_text("Объявление опубликовано!")
+
+    return ConversationHandler.END
+
+
+def cancel(update, context):
+    update.message.reply_text("Операция отменена.")
+    return ConversationHandler.END
+
+
+def show_advertisements(update, context):
+    if advertisements:
+        for title, ad in advertisements.items():
+            context.bot.send_message(chat_id=update.effective_chat.id, text=ad)
+    else:
+        context.bot.send_message(chat_id=update.effective_chat.id, text="На доске объявлений пока ничего нет.")
+
+
+def error(update, context):
+    logger.warning('Update "%s" caused error "%s"', update, context.error)
+
+
+def main():
+    updater = Updater("6242092666:AAGiK2UoKdCAUkwMAFBHSJro6hPKTo5LAys", use_context=True)
+
+    dp = updater.dispatcher
+
+    conv_handler = ConversationHandler(
+        entry_points=[CommandHandler('post', post_advertisement)],
+        states={
+            CATEGORY: [CallbackQueryHandler(select_category)],
+            TITLE: [MessageHandler(Filters.text, enter_title)],
+            DESCRIPTION: [MessageHandler(Filters.text, enter_description)],
+            PHOTO: [MessageHandler(Filters.photo, receive_photo), CommandHandler('done', done)],
+        },
+        fallbacks=[CommandHandler('cancel', cancel)]
+    )
+
+    dp.add_handler(conv_handler)
+    dp.add_handler(CommandHandler('show', show_advertisements))
+
+    dp.add_error_handler(error)
+
+    updater.start_polling()
+    updater.idle()
+
+
+if __name__ == '__main__':
+    main()
